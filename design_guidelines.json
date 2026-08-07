@@ -1,0 +1,105 @@
+{
+  "theme_archetype": "Swiss & High-Contrast (Light Mode Default)",
+  "emotional_tone": "Authoritative, Precise, Industrial",
+  "typography": {
+    "strategy": "Technical and clear. Distinct hierarchy.",
+    "fonts": [
+      {
+        "role": "Headings",
+        "family": "Chivo",
+        "weight": "font-black for H1/H2, font-bold for widgets",
+        "usage": "Use tight letter spacing (tracking-tight) to create a mechanical, precise feel. Do not use default Inter."
+      },
+      {
+        "role": "Body & Data",
+        "family": "IBM Plex Sans",
+        "weight": "font-normal to font-medium",
+        "usage": "Highly legible for dense UI. Critical: use tabular-nums utility class for all tables and metric values to ensure vertical alignment of digits."
+      }
+    ],
+    "scale": {
+      "h1": "text-3xl sm:text-4xl",
+      "h2": "text-2xl sm:text-3xl",
+      "h3": "text-lg sm:text-xl",
+      "body": "text-sm",
+      "labels": "text-xs uppercase tracking-[0.2em] font-bold"
+    }
+  },
+  "colors": {
+    "background": {
+      "app": "#F8F9FA",
+      "surface": "#FFFFFF",
+      "sidebar": "#0A0A0A"
+    },
+    "text": {
+      "primary": "#0A0A0A",
+      "secondary": "#4A4A4A",
+      "sidebar_primary": "#FFFFFF",
+      "sidebar_secondary": "#A0A0A0"
+    },
+    "brand_accents": {
+      "primary": "#0052FF",
+      "alert_error": "#E50000",
+      "alert_warning": "#FFB000",
+      "success": "#008A00"
+    },
+    "borders": "#E5E5E5",
+    "rules": [
+      "No full-screen gradients.",
+      "Never use pure #000000 for text, use #0A0A0A.",
+      "Semantic colors (red/amber) are strictly reserved for state indicators (low stock, errors) and should not be used for decoration."
+    ]
+  },
+  "layouts": {
+    "strategy": "Dense, Scannable, High-Density Grid (MODE B)",
+    "dashboard_grid": "grid-cols-12 gap-3 md:gap-4. Use col-span-12 md:col-span-3 for KPI metrics. Main charts or tables take col-span-12 md:col-span-8 or 9.",
+    "navigation": "Persistent left-rail sidebar (dark mode sidebar #0A0A0A against light mode app #F8F9FA for high structural contrast).",
+    "cards_and_surfaces": "Cardless or flat geometric. 1px solid border (#E5E5E5). No heavy drop shadows. Max border-radius: 4px (rounded-sm) for a sharp, technical look."
+  },
+  "components_strategy": {
+    "shadcn_customization": "Use Shadcn components but override default rounded corners to rounded-sm. Strip out soft shadows in favor of 1px borders.",
+    "tables": "Tables are the primary interface. Use compact rows (h-10). Keep padding tight (px-3 py-2). Enable sticky headers for long inventory lists.",
+    "forms_inputs": "Use Shadcn Input and Select. For order entry, use clear tabular layouts. Active states should have a bold 2px ring of the primary accent color.",
+    "alerts": "Use Sonner for toasts (placed at bottom-right or top-center). Low stock warnings must use a stark red background with white text for maximum visibility.",
+    "buttons": "Sharp rectangles (rounded-sm). Solid primary color for primary actions, outline or ghost for secondary. ALWAYS set hover text color explicitly."
+  },
+  "motion": {
+    "strategy": "Minimalist and immediate. This is a work tool, not a toy.",
+    "interactions": "Fast transitions (duration-150). Hovering rows in tables slightly darkens background (hover:bg-gray-50).",
+    "loading": "Skeleton loaders for data tables rather than spinning indicators."
+  },
+  "media": {
+    "strategy": "Minimal imagery. Use industrial textures for the login screen to set a premium tone.",
+    "image_urls": [
+      {
+        "category": "Login Background",
+        "url": "https://images.unsplash.com/photo-1565610222536-ef125c59da2e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA3MDB8MHwxfHNlYXJjaHwzfHxtb2Rlcm4lMjB3YXJlaG91c2UlMjBhcmNoaXRlY3R1cmV8ZW58MHx8fHwxNzg2MDkwMzYzfDA&ixlib=rb-4.1.0&q=85",
+        "description": "Clean, modern warehouse concrete flooring for a subtle, professional login background."
+      },
+      {
+        "category": "Login Background Fallback / Accent",
+        "url": "https://images.unsplash.com/photo-1694885169342-909981fb408a?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA3MDB8MHwxfHNlYXJjaHwyfHxtb2Rlcm4lMjB3YXJlaG91c2UlMjBhcmNoaXRlY3R1cmV8ZW58MHx8fHwxNzg2MDkwMzYzfDA&ixlib=rb-4.1.0&q=85",
+        "description": "Empty warehouse architectural shot, useful for split-screen login layout."
+      }
+    ]
+  },
+  "accessibility": {
+    "contrast": "Ensure 4.5:1 ratio for all text. Alert states must be highly readable.",
+    "testing": "All interactive elements (buttons, table rows, form inputs, export buttons) MUST include data-testid attributes formatted in kebab-case based on their role (e.g., 'customer-select-dropdown', 'order-submit-button').",
+    "focus": "focus:ring-2 focus:ring-blue-600 focus:outline-none on all inputs and buttons."
+  },
+  "icons": {
+    "library": "lucide-react",
+    "usage": "Use stroke-width 1.5 or 2 for clarity. Do not use emojis."
+  },
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "You tend to converge toward generic outputs. Avoid AI slop: make this dashboard look like a high-end, $10k/month enterprise ERP.",
+    "Do not center-align the app container. Data dense apps must be left-aligned or span full width.",
+    "Prioritize Shadcn UI for all complex interactive components. DO NOT build raw HTML selects or calendars.",
+    "Use tabular-nums in Tailwind for all quantity/stock numbers.",
+    "Include data-testid on every clickable element or form field.",
+    "Implement Sonner for toast notifications (e.g., 'Order placed', 'Stock low').",
+    "Ensure dark/light contrast shift between the sidebar and main content area.",
+    "Keep background surfaces solid. DO NOT use complete transparent backgrounds in headers, overlays, or surfaces that have content under them."
+  ]
+}
