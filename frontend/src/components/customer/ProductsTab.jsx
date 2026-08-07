@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Plus, Trash2, Pencil, Save, X, Download, Minus, PlusCircle } from "lucide-react";
+import { Plus, Trash2, Pencil, Save, X, Download, Minus, PlusCircle, Upload, FileSpreadsheet } from "lucide-react";
 import api from "@/lib/api";
 import { API } from "@/lib/api";
+import { parseCSV } from "@/lib/csv";
 
 const EMPTY = { name: "", sku: "", unit: "adet", quantity: 0, low_stock_threshold: 0 };
 
@@ -14,6 +15,13 @@ export default function ProductsTab({ customerId }) {
     const [adjustFor, setAdjustFor] = useState(null); // product
     const [adjustDelta, setAdjustDelta] = useState("");
     const [adjustNote, setAdjustNote] = useState("");
+
+    // Bulk import state
+    const [importOpen, setImportOpen] = useState(false);
+    const [importRows, setImportRows] = useState([]);
+    const [importFileName, setImportFileName] = useState("");
+    const [importMode, setImportMode] = useState("add"); // "add" | "replace"
+    const [importing, setImporting] = useState(false);
 
     const load = () => api.get(`/customers/${customerId}/products`).then((r) => setItems(r.data));
     useEffect(() => { load(); }, [customerId]);
@@ -65,6 +73,74 @@ export default function ProductsTab({ customerId }) {
         }
     };
 
+    const HEADER_ALIASES = {
+        name: ["name", "ad", "ürün", "urun", "ürün adı", "urun adi"],
+        sku: ["sku", "kod", "stok kodu"],
+        unit: ["unit", "birim"],
+        quantity: ["quantity", "miktar", "adet", "stok"],
+        low_stock_threshold: ["low_stock_threshold", "düşük stok", "dusuk stok", "düşük eşik", "esik", "eşik"],
+    };
+    const canonicalKey = (h) => {
+        const norm = h.toLowerCase().trim();
+        for (const [k, aliases] of Object.entries(HEADER_ALIASES)) {
+            if (aliases.some((a) => a === norm)) return k;
+        }
+        return null;
+    };
+
+    const handleFile = async (file) => {
+        if (!file) return;
+        try {
+            const text = await file.text();
+            const { headers, rows } = parseCSV(text);
+            if (!rows.length) { toast.error("CSV boş görünüyor"); return; }
+            const keyMap = {};
+            headers.forEach((h) => {
+                const k = canonicalKey(h);
+                if (k) keyMap[h] = k;
+            });
+            if (!Object.values(keyMap).includes("name")) {
+                toast.error("Zorunlu 'name' (Ad) sütunu bulunamadı");
+                return;
+            }
+            const normalized = rows
+                .map((r) => {
+                    const o = { name: "", sku: "", unit: "adet", quantity: 0, low_stock_threshold: null };
+                    for (const [origKey, canonKey] of Object.entries(keyMap)) {
+                        const v = r[origKey];
+                        if (canonKey === "quantity" || canonKey === "low_stock_threshold") {
+                            const n = Number(String(v).replace(",", "."));
+                            o[canonKey] = isNaN(n) ? (canonKey === "low_stock_threshold" ? null : 0) : n;
+                        } else {
+                            o[canonKey] = v;
+                        }
+                    }
+                    return o;
+                })
+                .filter((r) => r.name && r.name.trim());
+            if (!normalized.length) { toast.error("Geçerli satır bulunamadı"); return; }
+            setImportRows(normalized);
+            setImportFileName(file.name);
+        } catch (e) {
+            toast.error("CSV okunamadı: " + e.message);
+        }
+    };
+
+    const submitImport = async () => {
+        if (!importRows.length) return;
+        setImporting(true);
+        try {
+            const { data } = await api.post(`/customers/${customerId}/products/bulk-import`, {
+                rows: importRows, mode: importMode,
+            });
+            toast.success(`İçe aktarma tamam: ${data.created} yeni, ${data.updated} güncellendi${data.ignored ? `, ${data.ignored} atlandı` : ""}`);
+            setImportOpen(false); setImportRows([]); setImportFileName("");
+            load();
+        } catch (err) {
+            toast.error(err?.response?.data?.detail || "İçe aktarma başarısız");
+        } finally { setImporting(false); }
+    };
+
     return (
         <div>
             <div className="flex items-center justify-between mb-4">
@@ -77,6 +153,13 @@ export default function ProductsTab({ customerId }) {
                     >
                         <Download size={12} /> CSV İndir
                     </a>
+                    <button
+                        data-testid="import-products-csv"
+                        onClick={() => { setImportOpen(true); setImportRows([]); setImportFileName(""); setImportMode("add"); }}
+                        className="h-9 px-3 border border-neutral-300 hover:bg-neutral-100 text-xs rounded-sm flex items-center gap-1"
+                    >
+                        <Upload size={12} /> CSV Yükle
+                    </button>
                     <button
                         data-testid="add-product-button"
                         onClick={() => { setShowForm(true); setEditingId(null); setForm(EMPTY); }}
@@ -195,6 +278,104 @@ export default function ProductsTab({ customerId }) {
                                 <PlusCircle size={14}/> Giriş
                             </button>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {importOpen && (
+                <div className="fixed inset-0 bg-black/50 z-50 grid place-items-center p-4" onClick={() => setImportOpen(false)}>
+                    <div className="bg-white border border-neutral-200 max-w-3xl w-full max-h-[85vh] flex flex-col" onClick={(e)=>e.stopPropagation()} data-testid="import-dialog">
+                        <header className="h-12 px-4 border-b border-neutral-200 flex items-center gap-2">
+                            <FileSpreadsheet size={16}/>
+                            <div className="font-display font-bold">Toplu Stok Girişi (CSV)</div>
+                            <button onClick={() => setImportOpen(false)} className="ml-auto h-8 w-8 grid place-items-center hover:bg-neutral-100 rounded-sm"><X size={14}/></button>
+                        </header>
+
+                        <div className="p-4 border-b border-neutral-100 bg-neutral-50 text-xs text-neutral-600">
+                            <div className="mb-1"><strong>Sütun başlıkları:</strong> <code className="font-mono">name, sku, unit, quantity, low_stock_threshold</code> (veya Türkçe: <code className="font-mono">ad, kod, birim, miktar, düşük stok</code>).</div>
+                            <div>İpucu: Mevcut stoğu "CSV İndir" ile alıp düzenleyip yükleyebilirsiniz. Türkçe karakter ve virgüllü ondalık destekli.</div>
+                        </div>
+
+                        <div className="p-4 flex items-center gap-3 border-b border-neutral-100">
+                            <label className="h-10 px-3 border border-neutral-300 hover:bg-neutral-100 text-sm rounded-sm inline-flex items-center gap-2 cursor-pointer">
+                                <Upload size={14}/> Dosya Seç
+                                <input
+                                    data-testid="import-file-input"
+                                    type="file" accept=".csv,text/csv" className="hidden"
+                                    onChange={(e) => handleFile(e.target.files?.[0])}
+                                />
+                            </label>
+                            {importFileName && (
+                                <div className="text-xs text-neutral-500 font-mono truncate">{importFileName} — {importRows.length} satır</div>
+                            )}
+                            <div className="ml-auto flex items-center gap-2">
+                                <span className="label-caps text-neutral-500">Mod</span>
+                                <div className="flex border border-neutral-300 rounded-sm">
+                                    <button
+                                        data-testid="import-mode-add"
+                                        onClick={() => setImportMode("add")}
+                                        className={`h-9 px-3 text-xs ${importMode === "add" ? "bg-[#0A0A0A] text-white" : "hover:bg-neutral-100"}`}>
+                                        Ekle (+)
+                                    </button>
+                                    <button
+                                        data-testid="import-mode-replace"
+                                        onClick={() => setImportMode("replace")}
+                                        className={`h-9 px-3 text-xs ${importMode === "replace" ? "bg-[#0A0A0A] text-white" : "hover:bg-neutral-100"}`}>
+                                        Değiştir (=)
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex-1 overflow-auto">
+                            {importRows.length === 0 && (
+                                <div className="p-10 text-center text-sm text-neutral-500">Bir CSV dosyası seçin. Ürün adına göre eşleşme yapılır — mevcut ürünlerin stoğuna eklenir, yeni ürünler otomatik oluşturulur.</div>
+                            )}
+                            {importRows.length > 0 && (
+                                <table className="w-full text-sm">
+                                    <thead className="sticky top-0 bg-white">
+                                        <tr className="text-left label-caps text-neutral-500 border-b border-neutral-200">
+                                            <th className="px-4 py-2">Ad</th>
+                                            <th className="px-4 py-2">Kod</th>
+                                            <th className="px-4 py-2">Birim</th>
+                                            <th className="px-4 py-2 text-right">Miktar</th>
+                                            <th className="px-4 py-2 text-right">Düşük Eşik</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {importRows.map((r, i) => (
+                                            <tr key={i} className="border-b border-neutral-100">
+                                                <td className="px-4 py-1.5 font-medium">{r.name}</td>
+                                                <td className="px-4 py-1.5 font-mono text-xs text-neutral-500">{r.sku || "—"}</td>
+                                                <td className="px-4 py-1.5 text-neutral-600">{r.unit}</td>
+                                                <td className="px-4 py-1.5 text-right tabular-nums">{r.quantity}</td>
+                                                <td className="px-4 py-1.5 text-right tabular-nums text-neutral-500">{r.low_stock_threshold ?? "—"}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            )}
+                        </div>
+
+                        <footer className="p-4 border-t border-neutral-200 flex items-center justify-between">
+                            <div className="text-xs text-neutral-500">
+                                {importMode === "add"
+                                    ? "Mevcut ürünlerin stoğuna eklenir, yeni ürünler oluşturulur."
+                                    : "Mevcut ürünlerin stok değeri yenisiyle değiştirilir."}
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={() => setImportOpen(false)} className="h-10 px-4 border border-neutral-300 hover:bg-neutral-100 text-sm rounded-sm">İptal</button>
+                                <button
+                                    data-testid="import-submit"
+                                    disabled={!importRows.length || importing}
+                                    onClick={submitImport}
+                                    className={`h-10 px-5 text-sm font-semibold rounded-sm flex items-center gap-2 transition-colors ${
+                                        importRows.length && !importing ? "bg-[#0A0A0A] hover:bg-[#0052FF] text-white" : "bg-neutral-200 text-neutral-500 cursor-not-allowed"
+                                    }`}>
+                                    <Save size={14}/> {importing ? "Yükleniyor…" : `${importRows.length} Satırı Uygula`}
+                                </button>
+                            </div>
+                        </footer>
                     </div>
                 </div>
             )}

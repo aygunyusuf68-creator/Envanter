@@ -23,8 +23,19 @@ export default function OrdersTab({ customerId }) {
 
     const validRows = rows.filter((r) => r.package_id && Number(r.quantity) > 0);
 
+    // Duplicate package detection
+    const packageCounts = {};
+    validRows.forEach((r) => {
+        packageCounts[r.package_id] = (packageCounts[r.package_id] || 0) + 1;
+    });
+    const duplicatePkgIds = Object.entries(packageCounts).filter(([, c]) => c > 1).map(([id]) => id);
+    const hasDuplicates = duplicatePkgIds.length > 0;
+    const duplicateNames = duplicatePkgIds
+        .map((id) => packages.find((p) => p.id === id)?.code)
+        .filter(Boolean);
+
     useEffect(() => {
-        if (validRows.length === 0) { setPreview(null); return; }
+        if (validRows.length === 0 || hasDuplicates) { setPreview(null); return; }
         const items = validRows.map((r) => ({ package_id: r.package_id, quantity: Number(r.quantity) }));
         const t = setTimeout(async () => {
             try {
@@ -36,9 +47,13 @@ export default function OrdersTab({ customerId }) {
     // eslint-disable-next-line
     }, [customerId, JSON.stringify(rows), note]);
 
-    const canSubmit = preview && preview.lines.length > 0 && preview.insufficient.length === 0 && validRows.length > 0;
+    const canSubmit = preview && preview.lines.length > 0 && preview.insufficient.length === 0 && validRows.length > 0 && !hasDuplicates;
 
     const submit = async () => {
+        if (hasDuplicates) {
+            toast.error(`Mükerrer paket: ${duplicateNames.join(", ")}. Aynı paketi tek satırda birleştirin.`);
+            return;
+        }
         if (!canSubmit) return;
         setSubmitting(true);
         try {
@@ -126,6 +141,18 @@ export default function OrdersTab({ customerId }) {
                         <div className="label-caps text-neutral-500 mb-1">Not</div>
                         <input value={note} onChange={(e) => setNote(e.target.value)} className="w-full h-10 px-3 border border-neutral-300 rounded-sm text-sm"/>
                     </div>
+
+                    {hasDuplicates && (
+                        <div data-testid="duplicate-warning" className="mb-3 p-3 bg-[#FFF4E5] border border-[#FFB000] text-[#8B5A00] text-xs rounded-sm flex items-start gap-2">
+                            <TriangleAlert size={14} className="shrink-0 mt-0.5"/>
+                            <div>
+                                <div className="font-semibold">Mükerrer paket seçimi</div>
+                                <div className="mt-1">
+                                    {duplicateNames.join(", ")} paketi birden fazla satırda seçili. Aynı paketi tek satırda toplayıp adedi artırın.
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     <button
                         data-testid="order-submit-button"

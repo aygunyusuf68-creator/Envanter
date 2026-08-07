@@ -125,6 +125,17 @@ class OrderCreate(BaseModel):
     items: List[OrderPackageItem]
     note: Optional[str] = ""
 
+class BulkImportRow(BaseModel):
+    name: str
+    sku: Optional[str] = ""
+    unit: Optional[str] = "adet"
+    quantity: float = 0
+    low_stock_threshold: Optional[float] = None
+
+class BulkImportBody(BaseModel):
+    rows: List[BulkImportRow]
+    mode: str = "add"  # "add" (increment existing) or "replace" (overwrite)
+
 # ---------------- Startup ----------------
 @app.on_event("startup")
 async def startup():
@@ -229,6 +240,70 @@ async def create_product(customer_id: str, body: ProductCreate, user=Depends(get
     if doc["quantity"] > 0:
         await log_movement(customer_id, doc["id"], doc["name"], doc["quantity"], "initial", "Başlangıç stoğu", None)
     return doc
+
+@api.post("/customers/{customer_id}/products/bulk-import")
+async def bulk_import_products(customer_id: str, body: BulkImportBody, user=Depends(get_current_user)):
+    await ensure_customer(customer_id)
+    if not body.rows:
+        raise HTTPException(400, "En az bir satır gerekli")
+    if body.mode not in ("add", "replace"):
+        raise HTTPException(400, "Geçersiz mod")
+
+    existing = await db.products.find({"customer_id": customer_id}, {"_id": 0}).to_list(5000)
+    by_name = {p["name"].strip().lower(): p for p in existing}
+
+    created = 0
+    updated = 0
+    ignored = 0
+    details = []
+    for r in body.rows:
+        name = (r.name or "").strip()
+        if not name:
+            ignored += 1
+            continue
+        qty = float(r.quantity or 0)
+        key = name.lower()
+        if key in by_name:
+            prod = by_name[key]
+            if body.mode == "add":
+                new_qty = float(prod["quantity"]) + qty
+                delta = qty
+                note = f"Toplu içe aktarma (+{qty})"
+                kind = "in"
+            else:  # replace
+                new_qty = qty
+                delta = qty - float(prod["quantity"])
+                note = f"Toplu içe aktarma (yeni: {qty})"
+                kind = "in" if delta >= 0 else "out"
+            updates = {"quantity": new_qty}
+            if r.sku: updates["sku"] = r.sku.strip()
+            if r.unit: updates["unit"] = r.unit.strip()
+            if r.low_stock_threshold is not None:
+                updates["low_stock_threshold"] = float(r.low_stock_threshold)
+            await db.products.update_one({"customer_id": customer_id, "id": prod["id"]}, {"$set": updates})
+            if abs(delta) > 0:
+                await log_movement(customer_id, prod["id"], prod["name"], delta, kind, note, None)
+            updated += 1
+            details.append({"name": name, "action": "updated", "delta": delta, "new_quantity": new_qty})
+        else:
+            new_id = str(uuid.uuid4())
+            doc = {
+                "id": new_id,
+                "customer_id": customer_id,
+                "name": name,
+                "sku": (r.sku or "").strip(),
+                "unit": (r.unit or "adet").strip(),
+                "quantity": qty,
+                "low_stock_threshold": float(r.low_stock_threshold or 0),
+                "created_at": now_iso(),
+            }
+            await db.products.insert_one(doc)
+            if qty > 0:
+                await log_movement(customer_id, new_id, name, qty, "initial", "Toplu içe aktarma (yeni ürün)", None)
+            created += 1
+            details.append({"name": name, "action": "created", "delta": qty, "new_quantity": qty})
+
+    return {"created": created, "updated": updated, "ignored": ignored, "details": details}
 
 @api.patch("/customers/{customer_id}/products/{product_id}")
 async def update_product(customer_id: str, product_id: str, body: ProductUpdate, user=Depends(get_current_user)):
