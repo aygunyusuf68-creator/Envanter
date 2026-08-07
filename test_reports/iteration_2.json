@@ -1,0 +1,22 @@
+{
+  "summary": "Backend CSV export fix (Turkish Excel semicolon delimiter + BOM + sep=; hint) verified. All 15 pytest checks passed including raw-byte validation of BOM (EF BB BF), 'sep=;\\r\\n' hint, semicolon header, CRLF line endings, RFC-5987 UTF-8 filename*, semicolon-in-field quoting, bulk-import round-trip, order create/cancel stock restoration, bulk replace, and 6 seeded customers. Prior UnicodeEncodeError on Content-Disposition also resolved.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_csv_export.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is ~614 lines - approaching split threshold; consider modularizing (routes/customers, routes/orders, routes/exports).",
+    "csv_response builds full CSV in memory via StringIO before StreamingResponse - fine for current sizes (2k products / 10k movements) but not truly streaming; document limits.",
+    "export_movements limits to 10000; large customers could silently truncate. Consider pagination or streaming cursor."
+  ],
+  "updated_files": ["/app/backend/tests/test_csv_export.py"],
+  "success_rate": {"backend": "100% (15/15)", "frontend": "not tested (backend-only per request)"},
+  "test_credentials": "aygunyusuf68@gmail.com / admin123 (admin) - from /app/memory/test_credentials.md",
+  "seed_data_creation": "Test creates transient TEST_ products/packages and cleans up. Uses first seeded customer (Müşteri A).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "test_csv_export.py has 4 classes: TestAuth, TestCsvFormat (BOM/sep=/CRLF/quoted semicolons/UTF-8 filename*), TestBulkImportRoundtrip, TestRegression (product CRUD, order/cancel restores stock + 'cancel' movement, bulk replace mode, 6 customers). Runs in ~4s. To run: pytest /app/backend/tests/test_csv_export.py -v -o addopts=''. The pytest.ini in /app/backend uses xdist which conflicted with global pytest; used -o addopts='' to bypass."
+}

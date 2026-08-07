@@ -569,8 +569,9 @@ TR_MAP = str.maketrans({"ş":"s","Ş":"S","ç":"c","Ç":"C","ğ":"g","Ğ":"G","�
 
 def csv_response(rows: List[dict], headers: List[str], filename: str) -> StreamingResponse:
     buf = io.StringIO()
-    buf.write("\ufeff")  # BOM for Excel Turkish support
-    w = csv.DictWriter(buf, fieldnames=headers, extrasaction="ignore")
+    buf.write("\ufeff")  # BOM for Excel UTF-8 detection
+    buf.write("sep=;\r\n")  # Explicit delimiter hint for Excel (all locales)
+    w = csv.DictWriter(buf, fieldnames=headers, extrasaction="ignore", delimiter=";", lineterminator="\r\n")
     w.writeheader()
     for r in rows:
         w.writerow(r)
