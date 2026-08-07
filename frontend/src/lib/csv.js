@@ -5,10 +5,18 @@ export function parseCSV(text) {
     if (!text) return { headers: [], rows: [] };
     // Strip BOM
     if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+    // Strip Excel delimiter hint (e.g., "sep=;" on the first line)
+    const sepMatch = text.match(/^sep=(.)\r?\n/i);
+    let forcedDelim = null;
+    if (sepMatch) {
+        forcedDelim = sepMatch[1];
+        text = text.slice(sepMatch[0].length);
+    }
 
-    // Detect delimiter by first non-quoted line
+    // Detect delimiter by first non-quoted line (if not forced)
     const firstLine = text.split(/\r?\n/)[0] || "";
-    const delim = firstLine.split(";").length > firstLine.split(",").length ? ";" : ",";
+    const delim = forcedDelim
+        || (firstLine.split(";").length > firstLine.split(",").length ? ";" : ",");
 
     const rows = [];
     let field = "";
