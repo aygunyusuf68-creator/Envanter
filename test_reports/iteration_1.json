@@ -1,0 +1,45 @@
+{
+  "summary": "Backend smoke + feature testing for multi-customer inventory system. 31/33 backend checks passed. Two CSV export endpoints return 500 due to non-ASCII Turkish characters in Content-Disposition filename header (UnicodeEncodeError: 'latin-1' codec can't encode character '\\u015f').",
+  "tested_scope": ["backend", "auth", "integration"],
+  "passed": [
+    "POST /api/auth/login wrong password -> 401",
+    "POST /api/auth/login correct creds -> token+user returned",
+    "GET /api/auth/me with Bearer token returns admin",
+    "Auth guard: /api/customers and /api/dashboard/summary without token -> 401",
+    "GET /api/customers returns 6 seeded Müşteri A..F with valid UUID ids",
+    "PATCH /api/customers/{id} renames customer",
+    "POST /api/customers/{id}/products creates product; initial movement logged when qty>0",
+    "Product isolation: A's product not visible in B's list",
+    "PATCH product updates fields",
+    "Adjust +10 -> qty +10, movement kind='in'; -5 -> kind='out'",
+    "Adjust below zero -> 400",
+    "POST /api/customers/{id}/packages create + PATCH items update",
+    "Order preview: per_package, required, available, sufficient, insufficient[] correct",
+    "Order create with sufficient stock: deducts qty, creates order, logs movement kind='order' with negative delta",
+    "Order insufficient stock -> 400 Turkish message 'Yetersiz stok...' AND no deduction occurs",
+    "STOCK ISOLATION verified: order for A does not affect B's identically-named product qty",
+    "GET /api/dashboard/summary: total_customers=6, per_customer len=6, recent sorted desc, low_stock array present",
+    "DELETE product and DELETE package work"
+  ],
+  "failed": [
+    {
+      "area": "GET /api/customers/{id}/export/products",
+      "issue": "HTTP 500 UnicodeEncodeError: 'latin-1' codec can't encode character '\\u015f' (ş) in Content-Disposition filename. csv_response builds filename as f'stok_{c[name]}.csv' where c['name']='Müşteri A' -> Starlette rejects non-latin-1 header value.",
+      "evidence": "server.py:448 StreamingResponse headers={'Content-Disposition': f'attachment; filename=\"stok_Müşteri A.csv\"'}; traceback in /var/log/supervisor/backend.err.log",
+      "priority": "HIGH"
+    },
+    {
+      "area": "GET /api/customers/{id}/export/movements",
+      "issue": "Same UnicodeEncodeError as products export (filename contains 'Müşteri').",
+      "evidence": "server.py:462 -> csv_response filename 'hareketler_Müşteri A.csv'",
+      "priority": "HIGH"
+    }
+  ],
+  "action_items": [
+    "Fix csv_response in /app/backend/server.py to encode filename using RFC 5987. Example: from urllib.parse import quote; ascii_name = c['name'].encode('ascii','ignore').decode() or 'export'; disposition = f\"attachment; filename=\\\"{ascii_name}.csv\\\"; filename*=UTF-8''{quote(f'{prefix}_{c[name]}.csv')}\". Or simply slugify/transliterate Turkish chars (ş->s, ü->u, ö->o, ç->c, ğ->g, ı->i) before putting into filename.",
+    "After fix, re-run export endpoints — they should return 200 with body starting with BOM (\\ufeff) and headers 'name,sku,unit,quantity,low_stock_threshold' for products and movement headers for movements."
+  ],
+  "success_rate": {"backend": "94%", "frontend": "not tested (skipped per request)"},
+  "retest_needed": true,
+  "full_testing_deferred": true
+}
