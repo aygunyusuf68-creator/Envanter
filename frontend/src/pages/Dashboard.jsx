@@ -15,10 +15,10 @@ function Kpi({ label, value, accent, testid }) {
 }
 
 function kindLabel(k) {
-    return { in: "Giriş", out: "Çıkış", order: "Sipariş", initial: "Başlangıç" }[k] || k;
+    return { in: "Giriş", out: "Çıkış", order: "Sipariş", initial: "Başlangıç", cancel: "İptal" }[k] || k;
 }
 function kindColor(k) {
-    return { in: "text-[#008A00]", out: "text-[#E50000]", order: "text-[#0052FF]", initial: "text-neutral-500" }[k] || "";
+    return { in: "text-[#008A00]", out: "text-[#E50000]", order: "text-[#0052FF]", initial: "text-neutral-500", cancel: "text-[#FFB000]" }[k] || "";
 }
 
 export default function Dashboard() {

@@ -11,6 +11,7 @@ import uuid
 import logging
 import bcrypt
 import jwt
+from urllib.parse import quote
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
@@ -116,9 +117,12 @@ class PackageUpdate(BaseModel):
     name: Optional[str] = None
     items: Optional[List[PackageItem]] = None
 
-class OrderCreate(BaseModel):
+class OrderPackageItem(BaseModel):
     package_id: str
     quantity: int
+
+class OrderCreate(BaseModel):
+    items: List[OrderPackageItem]
     note: Optional[str] = ""
 
 # ---------------- Startup ----------------
@@ -327,81 +331,130 @@ async def list_orders(customer_id: str, user=Depends(get_current_user)):
     docs = await db.orders.find({"customer_id": customer_id}, {"_id": 0}).sort("created_at", -1).to_list(500)
     return docs
 
+async def _resolve_order_items(customer_id: str, items: List[OrderPackageItem]):
+    """Return (packages_meta, aggregated_lines) where aggregated_lines is a dict product_id -> {product, total_required, breakdown[{pkg_code, per_package, quantity}]}."""
+    if not items:
+        raise HTTPException(400, "En az bir paket seçmelisiniz")
+    packages_meta = []
+    aggregated = {}
+    for it in items:
+        if it.quantity <= 0:
+            raise HTTPException(400, "Sipariş adedi 1'den küçük olamaz")
+        pkg = await db.packages.find_one({"customer_id": customer_id, "id": it.package_id})
+        if not pkg:
+            raise HTTPException(404, f"Paket bulunamadı: {it.package_id}")
+        if not pkg["items"]:
+            raise HTTPException(400, f"Paket {pkg['code']} içeriği tanımlı değil")
+        packages_meta.append({
+            "package_id": pkg["id"], "code": pkg["code"],
+            "name": pkg.get("name", ""), "quantity": int(it.quantity),
+        })
+        for pi in pkg["items"]:
+            pid = pi["product_id"]
+            req = float(pi["quantity"]) * float(it.quantity)
+            if pid not in aggregated:
+                aggregated[pid] = {"total_required": 0.0, "breakdown": []}
+            aggregated[pid]["total_required"] += req
+            aggregated[pid]["breakdown"].append({
+                "package_code": pkg["code"],
+                "per_package": pi["quantity"],
+                "package_quantity": int(it.quantity),
+                "subtotal": req,
+            })
+    return packages_meta, aggregated
+
 @api.post("/customers/{customer_id}/orders/preview")
 async def preview_order(customer_id: str, body: OrderCreate, user=Depends(get_current_user)):
     await ensure_customer(customer_id)
-    pkg = await db.packages.find_one({"customer_id": customer_id, "id": body.package_id})
-    if not pkg:
-        raise HTTPException(404, "Paket bulunamadı")
-    if body.quantity <= 0:
-        raise HTTPException(400, "Sipariş adedi 1'den küçük olamaz")
-    result = []
+    packages_meta, aggregated = await _resolve_order_items(customer_id, body.items)
+    lines = []
     insufficient = []
-    for item in pkg["items"]:
-        prod = await db.products.find_one({"customer_id": customer_id, "id": item["product_id"]}, {"_id": 0})
+    for pid, agg in aggregated.items():
+        prod = await db.products.find_one({"customer_id": customer_id, "id": pid}, {"_id": 0})
         if not prod:
-            insufficient.append({"product_name": "(silinmiş ürün)", "required": item["quantity"] * body.quantity, "available": 0})
-            continue
-        req = float(item["quantity"]) * float(body.quantity)
+            entry = {"product_id": pid, "product_name": "(silinmiş ürün)", "unit": "", "required": agg["total_required"], "available": 0, "sufficient": False, "breakdown": agg["breakdown"]}
+            lines.append(entry); insufficient.append(entry); continue
+        req = agg["total_required"]
         ok = float(prod["quantity"]) >= req
         entry = {
             "product_id": prod["id"],
             "product_name": prod["name"],
             "unit": prod.get("unit", "adet"),
-            "per_package": item["quantity"],
             "required": req,
             "available": float(prod["quantity"]),
             "sufficient": ok,
+            "breakdown": agg["breakdown"],
         }
-        result.append(entry)
+        lines.append(entry)
         if not ok:
             insufficient.append(entry)
-    return {"lines": result, "insufficient": insufficient, "package": {"code": pkg["code"], "name": pkg.get("name", "")}}
+    lines.sort(key=lambda x: x["product_name"])
+    return {"lines": lines, "insufficient": insufficient, "packages": packages_meta}
 
 @api.post("/customers/{customer_id}/orders")
 async def create_order(customer_id: str, body: OrderCreate, user=Depends(get_current_user)):
     await ensure_customer(customer_id)
-    pkg = await db.packages.find_one({"customer_id": customer_id, "id": body.package_id})
-    if not pkg:
-        raise HTTPException(404, "Paket bulunamadı")
-    if body.quantity <= 0:
-        raise HTTPException(400, "Sipariş adedi 1'den küçük olamaz")
-    if not pkg["items"]:
-        raise HTTPException(400, "Paketin içeriği tanımlı değil")
+    packages_meta, aggregated = await _resolve_order_items(customer_id, body.items)
 
-    # Verify stock for all lines first
-    lines = []
-    for item in pkg["items"]:
-        prod = await db.products.find_one({"customer_id": customer_id, "id": item["product_id"]})
+    resolved = []
+    for pid, agg in aggregated.items():
+        prod = await db.products.find_one({"customer_id": customer_id, "id": pid})
         if not prod:
-            raise HTTPException(400, f"Pakette silinmiş ürün var, önce paket içeriğini düzenleyin")
-        req = float(item["quantity"]) * float(body.quantity)
+            raise HTTPException(400, "Pakette silinmiş ürün var, önce paket içeriğini düzenleyin")
+        req = agg["total_required"]
         if float(prod["quantity"]) < req:
             raise HTTPException(400, f"Yetersiz stok: {prod['name']} (gerekli: {req}, mevcut: {prod['quantity']})")
-        lines.append((prod, req, item["quantity"]))
+        resolved.append((prod, req, agg["breakdown"]))
 
     order_id = str(uuid.uuid4())
+    pkg_summary = ", ".join(f"{p['code']}x{p['quantity']}" for p in packages_meta)
     order_doc = {
         "id": order_id,
         "customer_id": customer_id,
-        "package_id": pkg["id"],
-        "package_code": pkg["code"],
-        "package_name": pkg.get("name", ""),
-        "quantity": int(body.quantity),
+        "packages": packages_meta,
+        "summary": pkg_summary,
         "note": body.note or "",
-        "lines": [{"product_id": p["id"], "product_name": p["name"], "per_package": per, "total": req} for p, req, per in lines],
+        "status": "active",
+        "lines": [{"product_id": p["id"], "product_name": p["name"], "unit": p.get("unit","adet"), "total": req, "breakdown": bd} for p, req, bd in resolved],
         "created_at": now_iso(),
     }
     await db.orders.insert_one(order_doc)
 
-    # Deduct and log
-    for prod, req, _per in lines:
+    for prod, req, _bd in resolved:
         new_qty = float(prod["quantity"]) - req
         await db.products.update_one({"id": prod["id"]}, {"$set": {"quantity": new_qty}})
-        await log_movement(customer_id, prod["id"], prod["name"], -req, "order", f"Sipariş #{order_id[:8]} ({pkg['code']} x {body.quantity})", order_id)
+        await log_movement(customer_id, prod["id"], prod["name"], -req, "order", f"Sipariş #{order_id[:8]} ({pkg_summary})", order_id)
 
     order_doc.pop("_id", None)
     return order_doc
+
+@api.post("/customers/{customer_id}/orders/{order_id}/cancel")
+async def cancel_order(customer_id: str, order_id: str, user=Depends(get_current_user)):
+    order = await db.orders.find_one({"customer_id": customer_id, "id": order_id})
+    if not order:
+        raise HTTPException(404, "Sipariş bulunamadı")
+    if order.get("status") == "cancelled":
+        raise HTTPException(400, "Sipariş zaten iptal edilmiş")
+
+    summary = order.get("summary") or order.get("package_code", "")
+    # Restore stock for each line
+    for line in order.get("lines", []):
+        prod = await db.products.find_one({"customer_id": customer_id, "id": line["product_id"]})
+        # Old-format orders had 'per_package' instead of 'total' only; use 'total' when present else per_package*quantity
+        restore = float(line.get("total") or (float(line.get("per_package", 0)) * float(order.get("quantity", 0))))
+        if prod:
+            await db.products.update_one({"id": prod["id"]}, {"$set": {"quantity": float(prod["quantity"]) + restore}})
+            await log_movement(customer_id, prod["id"], prod["name"], restore, "cancel", f"İptal #{order_id[:8]} ({summary})", order_id)
+        else:
+            # Product deleted; still log the cancel entry with the stored name
+            await log_movement(customer_id, line["product_id"], line["product_name"], restore, "cancel", f"İptal #{order_id[:8]} (ürün silinmiş)", order_id)
+
+    await db.orders.update_one(
+        {"customer_id": customer_id, "id": order_id},
+        {"$set": {"status": "cancelled", "cancelled_at": now_iso()}}
+    )
+    doc = await db.orders.find_one({"customer_id": customer_id, "id": order_id}, {"_id": 0})
+    return doc
 
 # ---------------- Dashboard ----------------
 @api.get("/dashboard/summary")
@@ -437,6 +490,8 @@ async def dashboard(user=Depends(get_current_user)):
     }
 
 # ---------------- CSV Export ----------------
+TR_MAP = str.maketrans({"ş":"s","Ş":"S","ç":"c","Ç":"C","ğ":"g","Ğ":"G","ı":"i","İ":"I","ö":"o","Ö":"O","ü":"u","Ü":"U"})
+
 def csv_response(rows: List[dict], headers: List[str], filename: str) -> StreamingResponse:
     buf = io.StringIO()
     buf.write("\ufeff")  # BOM for Excel Turkish support
@@ -445,8 +500,10 @@ def csv_response(rows: List[dict], headers: List[str], filename: str) -> Streami
     for r in rows:
         w.writerow(r)
     buf.seek(0)
+    ascii_name = filename.translate(TR_MAP).encode("ascii", "ignore").decode() or "export.csv"
+    disposition = f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
     return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv", headers={
-        "Content-Disposition": f'attachment; filename="{filename}"'
+        "Content-Disposition": disposition
     })
 
 @api.get("/customers/{customer_id}/export/products")

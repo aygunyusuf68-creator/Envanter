@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { Download } from "lucide-react";
 import api, { API } from "@/lib/api";
 
-const KIND = { in: "Giriş", out: "Çıkış", order: "Sipariş", initial: "Başlangıç" };
-const COLOR = { in: "text-[#008A00]", out: "text-[#E50000]", order: "text-[#0052FF]", initial: "text-neutral-500" };
+const KIND = { in: "Giriş", out: "Çıkış", order: "Sipariş", initial: "Başlangıç", cancel: "İptal" };
+const COLOR = { in: "text-[#008A00]", out: "text-[#E50000]", order: "text-[#0052FF]", initial: "text-neutral-500", cancel: "text-[#FFB000]" };
 
 export default function MovementsTab({ customerId, customerName }) {
     const [items, setItems] = useState([]);
