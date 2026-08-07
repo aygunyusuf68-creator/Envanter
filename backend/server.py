@@ -136,6 +136,16 @@ class BulkImportBody(BaseModel):
     rows: List[BulkImportRow]
     mode: str = "add"  # "add" (increment existing) or "replace" (overwrite)
 
+class BulkPackageRow(BaseModel):
+    package_code: str
+    package_name: Optional[str] = ""
+    product_name: str
+    quantity: float
+
+class BulkPackageBody(BaseModel):
+    rows: List[BulkPackageRow]
+    mode: str = "replace"  # "replace" overwrites package items, "merge" appends
+
 # ---------------- Startup ----------------
 @app.on_event("startup")
 async def startup():
@@ -379,6 +389,80 @@ async def delete_package(customer_id: str, package_id: str, user=Depends(get_cur
         raise HTTPException(404, "Paket bulunamadı")
     return {"ok": True}
 
+@api.post("/customers/{customer_id}/packages/bulk-import")
+async def bulk_import_packages(customer_id: str, body: BulkPackageBody, user=Depends(get_current_user)):
+    await ensure_customer(customer_id)
+    if not body.rows:
+        raise HTTPException(400, "En az bir satır gerekli")
+    if body.mode not in ("replace", "merge"):
+        raise HTTPException(400, "Geçersiz mod")
+
+    # Load current products (name lowercase → doc) and packages (code → doc)
+    products = await db.products.find({"customer_id": customer_id}, {"_id": 0}).to_list(5000)
+    products_by_name = {p["name"].strip().lower(): p for p in products}
+    existing_packages = await db.packages.find({"customer_id": customer_id}, {"_id": 0}).to_list(1000)
+    packages_by_code = {p["code"].strip().lower(): p for p in existing_packages}
+
+    # Group rows by package_code
+    grouped = {}
+    for r in body.rows:
+        code = (r.package_code or "").strip()
+        if not code:
+            continue
+        key = code.lower()
+        if key not in grouped:
+            grouped[key] = {"code": code, "name": (r.package_name or "").strip(), "items": []}
+        elif r.package_name and not grouped[key]["name"]:
+            grouped[key]["name"] = r.package_name.strip()
+        grouped[key]["items"].append({
+            "product_name": (r.product_name or "").strip(),
+            "quantity": float(r.quantity or 0),
+        })
+
+    created = 0
+    updated = 0
+    skipped = []
+    for key, g in grouped.items():
+        resolved_items = []
+        missing = []
+        for it in g["items"]:
+            pname = it["product_name"]
+            qty = it["quantity"]
+            if not pname or qty <= 0:
+                continue
+            prod = products_by_name.get(pname.lower())
+            if not prod:
+                missing.append(pname)
+                continue
+            resolved_items.append({"product_id": prod["id"], "quantity": qty})
+        if missing:
+            skipped.append({"code": g["code"], "reason": "missing_products", "missing_products": sorted(set(missing))})
+            continue
+        if not resolved_items:
+            skipped.append({"code": g["code"], "reason": "no_valid_items", "missing_products": []})
+            continue
+
+        exists = packages_by_code.get(key)
+        if exists:
+            new_items = resolved_items if body.mode == "replace" else (exists.get("items", []) + resolved_items)
+            updates = {"items": new_items}
+            if g["name"]:
+                updates["name"] = g["name"]
+            await db.packages.update_one({"customer_id": customer_id, "id": exists["id"]}, {"$set": updates})
+            updated += 1
+        else:
+            await db.packages.insert_one({
+                "id": str(uuid.uuid4()),
+                "customer_id": customer_id,
+                "code": g["code"],
+                "name": g["name"],
+                "items": resolved_items,
+                "created_at": now_iso(),
+            })
+            created += 1
+
+    return {"created": created, "updated": updated, "skipped": skipped}
+
 # ---------------- Movements ----------------
 async def log_movement(customer_id: str, product_id: str, product_name: str, delta: float, kind: str, note: str, order_id: Optional[str]):
     await db.movements.insert_one({
@@ -593,6 +677,26 @@ async def export_movements(customer_id: str, user=Depends(get_current_user)):
     c = await ensure_customer(customer_id)
     movs = await db.movements.find({"customer_id": customer_id}, {"_id": 0}).sort("created_at", -1).to_list(10000)
     return csv_response(movs, ["created_at", "product_name", "delta", "kind", "note", "order_id"], f"hareketler_{c['name']}.csv")
+
+@api.get("/customers/{customer_id}/export/packages")
+async def export_packages(customer_id: str, user=Depends(get_current_user)):
+    c = await ensure_customer(customer_id)
+    products = await db.products.find({"customer_id": customer_id}, {"_id": 0}).to_list(5000)
+    prod_name_by_id = {p["id"]: p["name"] for p in products}
+    packages = await db.packages.find({"customer_id": customer_id}, {"_id": 0}).sort("code", 1).to_list(1000)
+    rows = []
+    for pk in packages:
+        if not pk.get("items"):
+            rows.append({"package_code": pk["code"], "package_name": pk.get("name", ""), "product_name": "", "quantity": ""})
+            continue
+        for it in pk["items"]:
+            rows.append({
+                "package_code": pk["code"],
+                "package_name": pk.get("name", ""),
+                "product_name": prod_name_by_id.get(it["product_id"], "(silinmiş ürün)"),
+                "quantity": it["quantity"],
+            })
+    return csv_response(rows, ["package_code", "package_name", "product_name", "quantity"], f"paketler_{c['name']}.csv")
 
 # ---------------- Mount ----------------
 app.include_router(api)
