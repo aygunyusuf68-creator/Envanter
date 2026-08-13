@@ -85,6 +85,9 @@ class LoginBody(BaseModel):
 class CustomerUpdate(BaseModel):
     name: str
 
+class CustomerCreate(BaseModel):
+    name: str
+
 class ProductCreate(BaseModel):
     name: str
     sku: Optional[str] = ""
@@ -207,16 +210,54 @@ async def me(user=Depends(get_current_user)):
 # ---------------- Customers ----------------
 @api.get("/customers")
 async def list_customers(user=Depends(get_current_user)):
-    docs = await db.customers.find({}, {"_id": 0}).sort("order", 1).to_list(100)
+    docs = await db.customers.find({}, {"_id": 0}).sort("order", 1).to_list(500)
     return docs
+
+@api.post("/customers")
+async def create_customer(body: CustomerCreate, user=Depends(get_current_user)):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "Müşteri adı gerekli")
+    last = await db.customers.find_one({}, sort=[("order", -1)])
+    next_order = (last["order"] + 1) if last and "order" in last else 1
+    doc = {
+        "id": str(uuid.uuid4()),
+        "name": name,
+        "order": next_order,
+        "created_at": now_iso(),
+    }
+    await db.customers.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
 
 @api.patch("/customers/{customer_id}")
 async def update_customer(customer_id: str, body: CustomerUpdate, user=Depends(get_current_user)):
-    r = await db.customers.update_one({"id": customer_id}, {"$set": {"name": body.name}})
+    r = await db.customers.update_one({"id": customer_id}, {"$set": {"name": body.name.strip()}})
     if r.matched_count == 0:
         raise HTTPException(404, "Müşteri bulunamadı")
     doc = await db.customers.find_one({"id": customer_id}, {"_id": 0})
     return doc
+
+@api.delete("/customers/{customer_id}")
+async def delete_customer(customer_id: str, user=Depends(get_current_user)):
+    c = await db.customers.find_one({"id": customer_id})
+    if not c:
+        raise HTTPException(404, "Müşteri bulunamadı")
+    # Cascade: remove all data belonging to this customer
+    r_prod = await db.products.delete_many({"customer_id": customer_id})
+    r_pkg = await db.packages.delete_many({"customer_id": customer_id})
+    r_ord = await db.orders.delete_many({"customer_id": customer_id})
+    r_mov = await db.movements.delete_many({"customer_id": customer_id})
+    await db.customers.delete_one({"id": customer_id})
+    return {
+        "ok": True,
+        "deleted": {
+            "products": r_prod.deleted_count,
+            "packages": r_pkg.deleted_count,
+            "orders": r_ord.deleted_count,
+            "movements": r_mov.deleted_count,
+        },
+    }
 
 async def ensure_customer(customer_id: str):
     c = await db.customers.find_one({"id": customer_id}, {"_id": 0})
